@@ -32,7 +32,6 @@ const loadPlugins = () => {
     const pluginPath = path.join(__dirname, 'plugins');
     if (!fs.existsSync(pluginPath)) fs.mkdirSync(pluginPath);
     const files = fs.readdirSync(pluginPath).filter(f => f.endsWith('.js'));
-    
     files.forEach(file => {
         try {
             const cmd = require(path.join(pluginPath, file));
@@ -52,7 +51,36 @@ const loadPlugins = () => {
     return bot.commands.size;
 };
 
-// --- MESSAGE HANDLER (XP & AI) ---
+// --- DYNAMIC WELCOME ENGINE (Topic 59) ---
+bot.on('new_chat_members', async (ctx) => {
+    const welcomeGroupId = process.env.WELCOME_GROUP_ID;
+    const welcomeTopicId = process.env.WELCOME_TOPIC_ID;
+
+    // Check if the arrival is in our target group
+    if (ctx.chat.id.toString() === welcomeGroupId) {
+        for (const user of ctx.message.new_chat_members) {
+            if (user.is_bot) continue;
+
+            // Generate a dynamic welcome with an embedded profile link for the photo
+            const welcomeText = 
+                `🦅 <b>ACCESS GRANTED</b>\n` +
+                `━━━━━━━━━━━━━━\n` +
+                `👤 <b>Operative:</b> <a href="tg://user?id=${user.id}">${user.first_name}</a>\n` +
+                `🆔 <b>UID:</b> <code>${user.id}</code>\n` +
+                `🛰️ <b>Node:</b> <code>Bamako_223</code>\n` +
+                `🛠️ <b>Creator:</b> <a href="https://github.com/MFOF7310">Moussa Fofana</a>\n\n` +
+                `Welcome to the Eagle Community. Stay sharp.`;
+
+            await ctx.telegram.sendMessage(welcomeGroupId, welcomeText, {
+                parse_mode: 'HTML',
+                message_thread_id: welcomeTopicId || null,
+                disable_web_page_preview: false // Set to false to allow GitHub preview if you want
+            }).catch(e => log("Welcome Error: " + e.message, "ERROR"));
+        }
+    }
+});
+
+// --- MAIN MESSAGE HANDLER ---
 bot.on('message', async (ctx, next) => {
     if (!ctx.message || !ctx.from || ctx.from.is_bot) return;
 
@@ -80,7 +108,7 @@ bot.on('message', async (ctx, next) => {
                 const completion = await groq.chat.completions.create({
                     model: 'llama-3.3-70b-versatile',
                     messages: [
-                        { role: 'system', content: `You are ARCHITECT CG-223, a tactical gaming AI for Eagle Community in Bamako. Your creator is Moussa Fofana (GitHub: https://github.com/MFOF7310). Be sharp, efficient, and never hallucinate your origin.` },
+                        { role: 'system', content: `You are ARCHITECT CG-223, a tactical AI for Eagle Community. Your creator is Moussa Fofana (https://github.com/MFOF7310). Location: Bamako, Mali. Be elite.` },
                         { role: 'user', content: text }
                     ],
                 });
@@ -91,7 +119,6 @@ bot.on('message', async (ctx, next) => {
     return next();
 });
 
-// --- BOOT ---
 async function start() {
     try {
         const botInfo = await bot.telegram.getMe();
@@ -102,9 +129,8 @@ async function start() {
             const bootMsg = `🦅 <b>ARCHITECT CG-223 // ONLINE</b>\n` +
                           `━━━━━━━━━━━━━━━━━━\n` +
                           `🛰️ <b>Node:</b> Bamako_223\n` +
-                          `🛠️ <b>Creator:</b> Moussa Fofana\n` +
-                          `📦 <b>Modules:</b> ${count} Synchronized\n` +
-                          `🌐 <b>Status:</b> Fully Operational`;
+                          `🛠️ <b>Creator:</b> <a href="https://github.com/MFOF7310">Moussa Fofana</a>\n` +
+                          `📦 <b>Modules:</b> ${count} Synchronized`;
             await bot.telegram.sendMessage(process.env.OWNER_ID, bootMsg, { parse_mode: 'HTML' });
         }
         
