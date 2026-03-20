@@ -2,91 +2,66 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const path = require('path');
-const Groq = require('groq-sdk');
 
-// --- TERMINAL STYLING ---
-const green = "\x1b[32m", cyan = "\x1b[36m", yellow = "\x1b[33m", reset = "\x1b[0m", bold = "\x1b[1m";
-
-const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const PREFIX = process.env.PREFIX || ".";
-
-bot.commands = new Map();
-
-// --- DATABASE PERSISTENCE ---
-const dbPath = path.join(__dirname, 'database.json');
-let database = JSON.parse(fs.existsSync(dbPath) ? fs.readFileSync(dbPath, 'utf8') : '{"users":{},"channels":{}}');
-const saveDatabase = () => fs.writeFileSync(dbPath, JSON.stringify(database, null, 2));
-
-// --- PLUGIN LOADER ---
-const loadPlugins = async () => {
-    const pluginPath = path.join(__dirname, 'plugins');
-    if (!fs.existsSync(pluginPath)) fs.mkdirSync(pluginPath);
-
-    const files = fs.readdirSync(pluginPath).filter(f => f.endsWith('.js'));
-    for (const file of files) {
-        try {
-            const cmd = require(path.join(pluginPath, file));
-            if (cmd.name && cmd.run) {
-                bot.command(cmd.name, (ctx) => cmd.run(ctx, database, bot));
-                if (cmd.aliases) cmd.aliases.forEach(a => bot.command(a, (ctx) => cmd.run(ctx, database, bot)));
-                bot.commands.set(cmd.name, cmd);
-                console.log(`${green}[SUCCESS]${reset} Linked Module: ${cyan}${cmd.name.toUpperCase()}${reset}`);
-            }
-        } catch (e) { console.log(`${yellow}[ERROR]${reset} ${file}: ${e.message}`); }
-    }
+const log = (msg, type = "INFO") => {
+    const color = type === "ERROR" ? "\x1b[31m" : "\x1b[32m";
+    console.log(`${color}[${type}] ${msg}\x1b[0m`);
 };
 
-// --- CORE MESSAGE HANDLER ---
-bot.on('message', async (ctx, next) => {
-    if (!ctx.message || !ctx.from || ctx.from.is_bot) return next();
+log("--- INITIALIZING ARCHITECT ENGINE ---");
 
-    const userId = ctx.from.id.toString();
-    const chatId = ctx.chat.id.toString();
-    const text = ctx.message.text || "";
+if (!process.env.TELEGRAM_TOKEN) {
+    log("FATAL: TELEGRAM_TOKEN missing in .env", "ERROR");
+    process.exit(1);
+}
 
-    // 1. INITIALIZE DATA
-    if (!database.users[userId]) database.users[userId] = { name: ctx.from.first_name, xp: 0, level: 1 };
-    if (!database.channels[chatId]) database.channels[chatId] = { lydia: false };
+const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
+bot.commands = new Map();
 
-    // 2. XP SYSTEM
-    database.users[userId].xp += Math.floor(Math.random() * 5) + 1;
-    saveDatabase();
-
-    // 3. COMMAND BYPASS
-    if (text.startsWith(PREFIX)) return next();
-
-    // 4. LYDIA AI LOGIC (DM, Mention, or Reply)
-    const isPrivate = ctx.chat.type === 'private';
-    const isLydiaEnabled = database.channels[chatId].lydia || false;
-    const isMentioned = text.includes(`@${ctx.botInfo.username}`);
-    const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.botInfo.id;
-
-    if (isPrivate || (isLydiaEnabled && (isMentioned || isReplyToBot))) {
-        const cleanInput = text.replace(new RegExp(`@${ctx.botInfo.username}`, 'g'), '').trim();
-        await ctx.sendChatAction('typing');
-        
+// --- PLUGIN ENGINE ---
+const loadPlugins = () => {
+    const pluginPath = path.join(__dirname, 'plugins');
+    if (!fs.existsSync(pluginPath)) fs.mkdirSync(pluginPath);
+    const files = fs.readdirSync(pluginPath).filter(f => f.endsWith('.js'));
+    
+    files.forEach(file => {
         try {
-            const history = isReplyToBot ? [{ role: 'assistant', content: ctx.message.reply_to_message.text }] : [];
-            const completion = await groq.chat.completions.create({
-                model: 'llama-3.3-70b-versatile',
-                messages: [
-                    { role: 'system', content: "You are ARCHITECT CG-223, a tactical gaming AI for Eagle Community in Bamako. Be sharp, direct, and maintain context." },
-                    ...history,
-                    { role: 'user', content: cleanInput || "Status report." }
-                ],
-            });
+            const cmd = require(path.join(pluginPath, file));
+            bot.command(cmd.name, (ctx) => cmd.run(ctx, {}, bot));
+            bot.commands.set(cmd.name, cmd);
+            log(`[MODULE] Loaded: ${cmd.name.toUpperCase()}`);
+        } catch (e) { log(`[MODULE] Failed ${file}: ${e.message}`, "ERROR"); }
+    });
+    return bot.commands.size;
+};
 
-            await ctx.reply(completion.choices[0].message.content, { reply_to_message_id: ctx.message.message_id });
-        } catch (err) { console.error(`${yellow}[AI ERROR]${reset}`, err.message); }
+// --- STARTUP LOGIC ---
+async function startBot() {
+    try {
+        log("Attempting to connect to Telegram...");
+        
+        // This line fetches the bot's actual name from the API
+        const botInfo = await bot.telegram.getMe();
+        log(`CONNECTED AS: @${botInfo.username} (${botInfo.first_name})`);
+
+        const count = loadPlugins();
+        log(`SYNC COMPLETE: ${count} plugins ready.`);
+
+        await bot.launch();
+        log("POLLING STARTED: ARCHITECT IS LIVE.");
+
+        // TEST DM TO OWNER
+        if (process.env.OWNER_ID) {
+            log(`Sending boot alert to Owner ID: ${process.env.OWNER_ID}`);
+            await bot.telegram.sendMessage(process.env.OWNER_ID, 
+                `🛰️ <b>NODE ONLINE</b>\nBot: @${botInfo.username}\nStatus: Ready for deployment.`, 
+                { parse_mode: 'HTML' }
+            ).catch(e => log(`DM Failed: ${e.message}. Did you start the bot in private?`, "ERROR"));
+        }
+
+    } catch (err) {
+        log(`CONNECTION FATAL: ${err.message}`, "ERROR");
     }
-    return next();
-});
+}
 
-// --- IGNITION ---
-bot.launch().then(async () => {
-    await loadPlugins();
-    console.log(`\n${green}🛰️  CLIENT   : @${bot.botInfo.username}${reset}`);
-    console.log(`${green}📍 NODE     : BAMAKO_223${reset}\n`);
-    bot.telegram.sendMessage(process.env.OWNER_ID, "🦅 <b>ARCHITECT CG-223 // ONLINE</b>", { parse_mode: 'HTML' }).catch(() => null);
-});
+startBot();
