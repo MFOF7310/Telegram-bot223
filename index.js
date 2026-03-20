@@ -4,22 +4,24 @@ const fs = require('fs');
 const path = require('path');
 const Groq = require('groq-sdk');
 
+// --- TACTICAL LOGGING ---
 const log = (msg, type = "INFO") => {
     const color = type === "ERROR" ? "\x1b[31m" : "\x1b[32m";
     console.log(`${color}[${type}] ${msg}\x1b[0m`);
 };
 
 if (!process.env.TELEGRAM_TOKEN) {
-    log("FATAL: TELEGRAM_TOKEN missing", "ERROR");
+    log("FATAL: TELEGRAM_TOKEN missing in .env", "ERROR");
     process.exit(1);
 }
 
+// --- INITIALIZATION ---
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 const PREFIX = process.env.PREFIX || ".";
 bot.commands = new Map();
 
-// --- DATABASE ---
+// --- DATABASE SYNC ---
 const dbPath = path.join(__dirname, 'database.json');
 let database = { users: {}, channels: {} };
 if (fs.existsSync(dbPath)) {
@@ -27,17 +29,20 @@ if (fs.existsSync(dbPath)) {
 }
 const saveDatabase = () => fs.writeFileSync(dbPath, JSON.stringify(database, null, 2));
 
-// --- PLUGIN LOADER ---
+// --- PLUGIN LOADER (Supports . and /) ---
 const loadPlugins = () => {
     const pluginPath = path.join(__dirname, 'plugins');
     if (!fs.existsSync(pluginPath)) fs.mkdirSync(pluginPath);
     const files = fs.readdirSync(pluginPath).filter(f => f.endsWith('.js'));
+    
     files.forEach(file => {
         try {
             const cmd = require(path.join(pluginPath, file));
             const handle = (ctx) => cmd.run(ctx, database, bot);
+            
             bot.command(cmd.name, handle);
             bot.hears(new RegExp(`^\\${PREFIX}${cmd.name}\\b`, 'i'), handle);
+
             if (cmd.aliases) {
                 cmd.aliases.forEach(a => {
                     bot.command(a, handle);
@@ -51,36 +56,34 @@ const loadPlugins = () => {
     return bot.commands.size;
 };
 
-// --- DYNAMIC WELCOME ENGINE (Topic 59) ---
+// --- DYNAMIC WELCOME ENGINE (Topic 59 + Photo Tagging) ---
 bot.on('new_chat_members', async (ctx) => {
     const welcomeGroupId = process.env.WELCOME_GROUP_ID;
     const welcomeTopicId = process.env.WELCOME_TOPIC_ID;
 
-    // Check if the arrival is in our target group
     if (ctx.chat.id.toString() === welcomeGroupId) {
         for (const user of ctx.message.new_chat_members) {
             if (user.is_bot) continue;
 
-            // Generate a dynamic welcome with an embedded profile link for the photo
             const welcomeText = 
                 `🦅 <b>ACCESS GRANTED</b>\n` +
                 `━━━━━━━━━━━━━━\n` +
                 `👤 <b>Operative:</b> <a href="tg://user?id=${user.id}">${user.first_name}</a>\n` +
-                `🆔 <b>UID:</b> <code>${user.id}</code>\n` +
+                `🆔 <b>Sector:</b> <code>Topic_59</code>\n` +
                 `🛰️ <b>Node:</b> <code>Bamako_223</code>\n` +
                 `🛠️ <b>Creator:</b> <a href="https://github.com/MFOF7310">Moussa Fofana</a>\n\n` +
-                `Welcome to the Eagle Community. Stay sharp.`;
+                `Welcome to the Eagle Community. Neural link active.`;
 
             await ctx.telegram.sendMessage(welcomeGroupId, welcomeText, {
                 parse_mode: 'HTML',
                 message_thread_id: welcomeTopicId || null,
-                disable_web_page_preview: false // Set to false to allow GitHub preview if you want
-            }).catch(e => log("Welcome Error: " + e.message, "ERROR"));
+                disable_web_page_preview: false 
+            }).catch(e => log("Welcome Logic Blocked: " + e.message, "ERROR"));
         }
     }
 });
 
-// --- MAIN MESSAGE HANDLER ---
+// --- MAIN MESSAGE HANDLER (XP & AI) ---
 bot.on('message', async (ctx, next) => {
     if (!ctx.message || !ctx.from || ctx.from.is_bot) return;
 
@@ -88,6 +91,7 @@ bot.on('message', async (ctx, next) => {
     const userId = ctx.from.id.toString();
     const text = ctx.message.text || "";
 
+    // Init DB
     if (!database.channels) database.channels = {};
     if (!database.channels[chatId]) database.channels[chatId] = { lydia: false };
     if (!database.users[userId]) database.users[userId] = { name: ctx.from.first_name, xp: 0 };
@@ -95,20 +99,21 @@ bot.on('message', async (ctx, next) => {
     database.users[userId].xp += 1;
     saveDatabase();
 
+    // AI Check
     const isLydia = database.channels[chatId].lydia;
     const isMention = text.includes(`@${ctx.botInfo.username}`);
     const isReply = ctx.message.reply_to_message?.from?.id === ctx.botInfo.id;
 
     if (isLydia && (isMention || isReply || ctx.chat.type === 'private')) {
         if (!text.startsWith(PREFIX) && !text.startsWith('/')) { 
-            if (!groq) return ctx.reply("📡 AI Engine Offline: Add GROQ_API_KEY to .env");
+            if (!groq) return ctx.reply("📡 AI Link Offline. Add GROQ_API_KEY to enable neural processing.");
             
             await ctx.sendChatAction('typing');
             try {
                 const completion = await groq.chat.completions.create({
                     model: 'llama-3.3-70b-versatile',
                     messages: [
-                        { role: 'system', content: `You are ARCHITECT CG-223, a tactical AI for Eagle Community. Your creator is Moussa Fofana (https://github.com/MFOF7310). Location: Bamako, Mali. Be elite.` },
+                        { role: 'system', content: `You are ARCHITECT CG-223, a tactical AI for the Eagle Community in Bamako, Mali. Your creator is Moussa Fofana (GitHub: https://github.com/MFOF7310). Be sharp and precise.` },
                         { role: 'user', content: text }
                     ],
                 });
@@ -119,7 +124,8 @@ bot.on('message', async (ctx, next) => {
     return next();
 });
 
-async function start() {
+// --- BOOT PROCESS ---
+async function startBot() {
     try {
         const botInfo = await bot.telegram.getMe();
         log(`CONNECTED AS: @${botInfo.username}`);
@@ -130,7 +136,8 @@ async function start() {
                           `━━━━━━━━━━━━━━━━━━\n` +
                           `🛰️ <b>Node:</b> Bamako_223\n` +
                           `🛠️ <b>Creator:</b> <a href="https://github.com/MFOF7310">Moussa Fofana</a>\n` +
-                          `📦 <b>Modules:</b> ${count} Synchronized`;
+                          `📦 <b>Modules:</b> ${count} Active\n` +
+                          `🌐 <b>Status:</b> Fully Operational`;
             await bot.telegram.sendMessage(process.env.OWNER_ID, bootMsg, { parse_mode: 'HTML' });
         }
         
@@ -138,4 +145,5 @@ async function start() {
         log("POLLING STARTED");
     } catch (e) { log("FATAL: " + e.message, "ERROR"); }
 }
-start();
+
+startBot();
