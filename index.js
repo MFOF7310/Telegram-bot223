@@ -17,8 +17,9 @@ if (!process.env.TELEGRAM_TOKEN) {
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 const PREFIX = process.env.PREFIX || ".";
+bot.commands = new Map();
 
-// --- DATABASE SYNC ---
+// --- DATABASE ---
 const dbPath = path.join(__dirname, 'database.json');
 let database = { users: {}, channels: {} };
 if (fs.existsSync(dbPath)) {
@@ -26,7 +27,7 @@ if (fs.existsSync(dbPath)) {
 }
 const saveDatabase = () => fs.writeFileSync(dbPath, JSON.stringify(database, null, 2));
 
-// --- PLUGIN LOADER (Dual Prefix Support) ---
+// --- PLUGIN LOADER ---
 const loadPlugins = () => {
     const pluginPath = path.join(__dirname, 'plugins');
     if (!fs.existsSync(pluginPath)) fs.mkdirSync(pluginPath);
@@ -36,22 +37,19 @@ const loadPlugins = () => {
         try {
             const cmd = require(path.join(pluginPath, file));
             const handle = (ctx) => cmd.run(ctx, database, bot);
-            
-            // Register /command
             bot.command(cmd.name, handle);
-            // Register .command
             bot.hears(new RegExp(`^\\${PREFIX}${cmd.name}\\b`, 'i'), handle);
-
             if (cmd.aliases) {
                 cmd.aliases.forEach(a => {
                     bot.command(a, handle);
                     bot.hears(new RegExp(`^\\${PREFIX}${a}\\b`, 'i'), handle);
                 });
             }
+            bot.commands.set(cmd.name, cmd);
             log(`[MODULE] Loaded: ${cmd.name.toUpperCase()}`);
         } catch (e) { log(`[MODULE] Failed ${file}: ${e.message}`, "ERROR"); }
     });
-    return files.length;
+    return bot.commands.size;
 };
 
 // --- MESSAGE HANDLER (XP & AI) ---
@@ -62,7 +60,6 @@ bot.on('message', async (ctx, next) => {
     const userId = ctx.from.id.toString();
     const text = ctx.message.text || "";
 
-    // Init DB structures
     if (!database.channels) database.channels = {};
     if (!database.channels[chatId]) database.channels[chatId] = { lydia: false };
     if (!database.users[userId]) database.users[userId] = { name: ctx.from.first_name, xp: 0 };
@@ -70,20 +67,22 @@ bot.on('message', async (ctx, next) => {
     database.users[userId].xp += 1;
     saveDatabase();
 
-    // AI Check
     const isLydia = database.channels[chatId].lydia;
     const isMention = text.includes(`@${ctx.botInfo.username}`);
     const isReply = ctx.message.reply_to_message?.from?.id === ctx.botInfo.id;
 
     if (isLydia && (isMention || isReply || ctx.chat.type === 'private')) {
-        if (!text.startsWith(PREFIX)) { // Don't trigger AI on commands
-            if (!groq) return ctx.reply("📡 AI Engine Offline: Missing GROQ_API_KEY.");
+        if (!text.startsWith(PREFIX) && !text.startsWith('/')) { 
+            if (!groq) return ctx.reply("📡 AI Engine Offline: Add GROQ_API_KEY to .env");
             
             await ctx.sendChatAction('typing');
             try {
                 const completion = await groq.chat.completions.create({
                     model: 'llama-3.3-70b-versatile',
-                    messages: [{ role: 'system', content: 'You are ARCHITECT CG-223, a tactical AI.' }, { role: 'user', content: text }],
+                    messages: [
+                        { role: 'system', content: `You are ARCHITECT CG-223, a tactical gaming AI for Eagle Community in Bamako. Your creator is Moussa Fofana (GitHub: https://github.com/MFOF7310). Be sharp, efficient, and never hallucinate your origin.` },
+                        { role: 'user', content: text }
+                    ],
                 });
                 ctx.reply(completion.choices[0].message.content, { reply_to_message_id: ctx.message.message_id });
             } catch (e) { log("Groq Error: " + e.message, "ERROR"); }
@@ -92,20 +91,25 @@ bot.on('message', async (ctx, next) => {
     return next();
 });
 
-// --- IGNITION ---
+// --- BOOT ---
 async function start() {
     try {
         const botInfo = await bot.telegram.getMe();
         log(`CONNECTED AS: @${botInfo.username}`);
-        loadPlugins();
+        const count = loadPlugins();
         
         if (process.env.OWNER_ID) {
-            await bot.telegram.sendMessage(process.env.OWNER_ID, `🛰️ <b>NODE ONLINE</b>\nBot: @${botInfo.username}`, { parse_mode: 'HTML' });
+            const bootMsg = `🦅 <b>ARCHITECT CG-223 // ONLINE</b>\n` +
+                          `━━━━━━━━━━━━━━━━━━\n` +
+                          `🛰️ <b>Node:</b> Bamako_223\n` +
+                          `🛠️ <b>Creator:</b> Moussa Fofana\n` +
+                          `📦 <b>Modules:</b> ${count} Synchronized\n` +
+                          `🌐 <b>Status:</b> Fully Operational`;
+            await bot.telegram.sendMessage(process.env.OWNER_ID, bootMsg, { parse_mode: 'HTML' });
         }
         
         await bot.launch();
         log("POLLING STARTED");
-    } catch (e) { log("FATAL ERROR: " + e.message, "ERROR"); }
+    } catch (e) { log("FATAL: " + e.message, "ERROR"); }
 }
-
 start();
