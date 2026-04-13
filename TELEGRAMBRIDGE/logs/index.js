@@ -11,6 +11,9 @@ const { setupLydia } = require('./plugins/lydia.js');
 // ================= 🔥 AFK SYSTEM IMPORT =================
 const { afkUsers } = require('./plugins/afk.js');
 
+// ================= 🔥 BAMAKO MARKET MANAGER =================
+const { getMarketState, updateMarketTrend, TRENDS } = require('./market-manager.js');
+
 // ================= SELF-HEALING PROTOCOL =================
 process.on('unhandledRejection', (reason, promise) => {
     console.error('\x1b[31m[ANTI-CRASH]\x1b[0m Unhandled Rejection:', reason);
@@ -287,6 +290,25 @@ const requiredTables = {
         discord_id TEXT UNIQUE,
         linked_at INTEGER,
         UNIQUE(telegram_id, discord_id)
+    )`,
+    
+    investments: `CREATE TABLE IF NOT EXISTS investments (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        invested_at INTEGER NOT NULL,
+        claimed INTEGER DEFAULT 0,
+        total_profit INTEGER DEFAULT 0,
+        platform TEXT DEFAULT 'discord'
+    )`,
+    
+    transfers: `CREATE TABLE IF NOT EXISTS transfers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL,
+        receiver_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        timestamp INTEGER NOT NULL,
+        platform TEXT DEFAULT 'discord'
     )`
 };
 
@@ -464,7 +486,6 @@ async function flushUserUpdates(retryCount = 0, retryId = null) {
     
     try {
         if (WRITE_STRATEGY.USE_TRANSACTIONS) {
-            // 🔥 PRO LEVEL: Use safeDbWrite with transaction
             client.safeDbWrite(() => {
                 const updateStmt = db.prepare(`
                     INSERT OR REPLACE INTO users (
@@ -943,6 +964,11 @@ client.once(Events.ClientReady, async () => {
         }
     }
     
+    // 🔥 DISPLAY CURRENT MARKET TREND ON BOOT
+    const marketState = getMarketState();
+    const trend = TRENDS[marketState.trend];
+    console.log(`${green}[MARKET]${reset} Current trend: ${trend.emoji} ${trend.name} (${(marketState.multiplier * 100).toFixed(1)}%)`);
+    
     const boxWidth = 64;
     const drawBoxLine = (label, value) => {
         const lineContent = `║  ${label.padEnd(12)} : ${value}`;
@@ -964,6 +990,7 @@ client.once(Events.ClientReady, async () => {
     console.log(`${blue}${bold}${drawBoxLine(`${green}🛡️ CIRCUIT BREAKER`, `READY`)}${reset}`);
     console.log(`${blue}${bold}${drawBoxLine(`${green}🧠 LYDIA`, `MULTI-AGENT AI`)}${reset}`);
     console.log(`${blue}${bold}${drawBoxLine(`${green}🌉 TELEGRAM`, client.telegramBridge?.enabled ? 'ACTIVE' : 'STANDBY')}${reset}`);
+    console.log(`${blue}${bold}${drawBoxLine(`${green}📊 MARKET`, `${trend.emoji} ${trend.name}`)}${reset}`);
     console.log(`${blue}${bold}╚${'═'.repeat(boxWidth - 2)}╝${reset}\n`);
 
     if (client.userTimeouts) {
@@ -975,7 +1002,7 @@ client.once(Events.ClientReady, async () => {
         const owner = await client.users.fetch(process.env.OWNER_ID);
         
         const bootEmbed = new EmbedBuilder()
-            .setColor('#2ecc71')
+            .setColor(trend.color || '#2ecc71')
             .setAuthor({ name: '🦅 ARCHITECT CG-223 // NEURAL ENGINE ONLINE', iconURL: client.user.displayAvatarURL() })
             .setTitle('⚡ NEURAL ENGINE BOOT COMPLETE')
             .setDescription(
@@ -991,6 +1018,7 @@ client.once(Events.ClientReady, async () => {
                 `\u001b[1;33mCircuit Breaker:\u001b[0m READY\n` +
                 `\u001b[1;36mLydia AI:\u001b[0m MULTI-AGENT ACTIVE\n` +
                 `\u001b[1;36mTelegram:\u001b[0m ${client.telegramBridge?.enabled ? 'ACTIVE' : 'STANDBY'}\n` +
+                `\u001b[1;33mMarket:\u001b[0m ${trend.emoji} ${trend.name} (${(marketState.multiplier * 100).toFixed(1)}%)\n` +
                 `\u001b[1;32m═══════════════════════════════════════\u001b[0m\n` +
                 `\`\`\``
             )
